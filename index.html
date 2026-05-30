@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NVIDIA Ecosystem Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          nv: '#76B900',
+          'nv-dim': '#5a8c00',
+          up: '#76B900',
+          down: '#ff5b5b',
+          bg: '#0a0a0a',
+          panel: '#121212',
+          'panel-2': '#171717',
+          line: '#242424',
+          'line-2': '#2e2e2e',
+          ink: '#e8e8e8',
+          mute: '#8a8a8a',
+          'mute-2': '#5e5e5e',
+        },
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['JetBrains Mono', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  html, body { background: #0a0a0a; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: #0f0f0f; }
+  ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+  * { scrollbar-color: #2a2a2a #0f0f0f; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .fade-up { animation: fadeUp .35s ease both; }
+  @keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+  .skel { background: linear-gradient(90deg,#161616 25%,#202020 37%,#161616 63%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; }
+  .tradingview-widget-copyright { display: none !important; }
+  .card-hover { transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease, background .12s ease; }
+  .card-hover:hover { transform: translateY(-2px); border-color: #3a4a1a; box-shadow: 0 0 0 1px rgba(118,185,0,.18), 0 8px 26px -10px rgba(0,0,0,.8); background: #161616; }
+  .tabular { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body class="bg-bg text-ink font-sans antialiased">
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+/* ------------------------------------------------------------------ */
+/*  STATIC ECOSYSTEM DATA                                              */
+/* ------------------------------------------------------------------ */
+const DEFAULT_KEY = "d7g12c1r01qqb8rhuptgd7g12c1r01qqb8rhupu0";
+
+const COMPANIES = [
+  // IP
+  { t:"ARM",  n:"Arm Holdings",                  c:"IP", tv:"NASDAQ:ARM",
+    r:"Owns the CPU instruction-set architecture and core IP; NVIDIA's Grace data-center CPU and many of its SoCs are built on Arm cores, and NVIDIA attempted to acquire Arm in 2020–22." },
+  // Fab
+  { t:"TSM",  n:"Taiwan Semiconductor Mfg.",     c:"Fab", tv:"NYSE:TSM",
+    r:"The foundry that manufactures effectively all of NVIDIA's leading-edge GPUs (Hopper, Blackwell) on its most advanced nodes — NVIDIA's single most critical supplier." },
+  { t:"INTC", n:"Intel",                         c:"Fab", tv:"NASDAQ:INTC",
+    r:"x86 server CPUs that host NVIDIA accelerators, plus a foundry (Intel Foundry) and advanced-packaging alternative the industry is increasingly evaluating." },
+  // Memory
+  { t:"MU",   n:"Micron Technology",             c:"Memory", tv:"NASDAQ:MU",
+    r:"Supplies HBM (high-bandwidth memory) and GDDR for NVIDIA's data-center and gaming GPUs; HBM supply is a key bottleneck for AI accelerators." },
+  { t:"SNDK", n:"SanDisk",                       c:"Memory", tv:"NASDAQ:SNDK",
+    r:"NAND flash storage supplier (spun out of Western Digital) feeding the storage layer of AI server infrastructure." },
+  { t:"WDC",  n:"Western Digital",               c:"Memory", tv:"NASDAQ:WDC",
+    r:"Enterprise HDD and storage for the hyperscale data centers that house NVIDIA GPU clusters." },
+  // Packaging
+  { t:"ASX",  n:"ASE Technology Holding",        c:"Packaging", tv:"NYSE:ASX",
+    r:"World's largest outsourced semiconductor assembly & test (OSAT) provider, handling advanced packaging for AI silicon." },
+  { t:"AMKR", n:"Amkor Technology",              c:"Packaging", tv:"NASDAQ:AMKR",
+    r:"OSAT provider for advanced packaging and test, including 2.5D/heterogeneous assembly relevant to AI accelerators." },
+  { t:"CAMT", n:"Camtek",                        c:"Packaging", tv:"NASDAQ:CAMT",
+    r:"Supplies inspection and metrology equipment for advanced-packaging lines such as HBM and CoWoS." },
+  // Equipment
+  { t:"KLAC", n:"KLA Corporation",               c:"Equipment", tv:"NASDAQ:KLAC",
+    r:"Process control, inspection, and metrology equipment essential to leading-edge fabs and advanced packaging." },
+  { t:"LRCX", n:"Lam Research",                  c:"Equipment", tv:"NASDAQ:LRCX",
+    r:"Etch and deposition tools used to fabricate advanced logic and memory, including HBM stacks." },
+  { t:"ASML", n:"ASML Holding",                  c:"Equipment", tv:"NASDAQ:ASML",
+    r:"Sole supplier of EUV lithography systems required to manufacture NVIDIA's most advanced GPUs." },
+  { t:"KEYS", n:"Keysight Technologies",         c:"Equipment", tv:"NYSE:KEYS",
+    r:"Test and measurement instruments for chip, networking, and high-speed interconnect design and validation." },
+  // Networking
+  { t:"COHR", n:"Coherent",                      c:"Networking", tv:"NYSE:COHR",
+    r:"Optical components, lasers, and transceivers for the high-speed interconnects that link GPU clusters." },
+  { t:"GLW",  n:"Corning",                       c:"Networking", tv:"NYSE:GLW",
+    r:"Optical fiber and connectivity products underpinning AI data-center networking." },
+  { t:"FN",   n:"Fabrinet",                      c:"Networking", tv:"NYSE:FN",
+    r:"Contract manufacturer of optical and electro-optical modules/transceivers used in AI networking." },
+  { t:"LITE", n:"Lumentum Holdings",             c:"Networking", tv:"NASDAQ:LITE",
+    r:"Optical transceivers and laser components for data-center interconnects." },
+  { t:"APH",  n:"Amphenol",                      c:"Networking", tv:"NYSE:APH",
+    r:"High-speed connectors, cables, and interconnect systems for GPU servers and rack-scale systems." },
+  // Server OEMs
+  { t:"DELL", n:"Dell Technologies",             c:"Server OEMs", tv:"NYSE:DELL",
+    r:"Builds and integrates NVIDIA-based AI servers and rack systems (e.g. GB200) for enterprise and cloud customers." },
+  { t:"SMCI", n:"Super Micro Computer",          c:"Server OEMs", tv:"NASDAQ:SMCI",
+    r:"High-density GPU server and rack-scale systems; a major NVIDIA AI server partner." },
+  { t:"JBL",  n:"Jabil",                         c:"Server OEMs", tv:"NYSE:JBL",
+    r:"Contract manufacturer producing server, networking, and power hardware for the AI data-center supply chain." },
+  // Power Systems
+  { t:"FLEX", n:"Flex",                          c:"Power Systems", tv:"NASDAQ:FLEX",
+    r:"Contract manufacturer of data-center power and hardware, including rack power and cooling components." },
+  { t:"VRT",  n:"Vertiv Holdings",               c:"Power Systems", tv:"NYSE:VRT",
+    r:"Power, cooling, and thermal-management infrastructure (incl. liquid cooling) for high-density GPU data centers." },
+  { t:"ETN",  n:"Eaton",                         c:"Power Systems", tv:"NYSE:ETN",
+    r:"Electrical power-distribution and management systems for data centers running NVIDIA clusters." },
+  // Power Electronics
+  { t:"STM",  n:"STMicroelectronics",            c:"Power Electronics", tv:"NYSE:STM",
+    r:"Power semiconductors and microcontrollers supplying power-stage components for server and edge systems." },
+  { t:"ADI",  n:"Analog Devices",                c:"Power Electronics", tv:"NASDAQ:ADI",
+    r:"Power-management, signal-chain, and interface ICs used across servers and networking gear." },
+  { t:"MPWR", n:"Monolithic Power Systems",      c:"Power Electronics", tv:"NASDAQ:MPWR",
+    r:"High-efficiency power-management ICs that regulate voltage for NVIDIA GPUs and AI server boards." },
+  { t:"NVTS", n:"Navitas Semiconductor",         c:"Power Electronics", tv:"NASDAQ:NVTS",
+    r:"GaN and SiC power semiconductors for high-efficiency data-center power supplies, tied to next-gen 800V power architecture work with NVIDIA." },
+  { t:"ON",   n:"ON Semiconductor (onsemi)",     c:"Power Electronics", tv:"NASDAQ:ON",
+    r:"Power and sensing semiconductors, including SiC, for data-center power delivery and conversion." },
+  // Direct Investments
+  { t:"CRWV", n:"CoreWeave",                      c:"Direct Investments", tv:"NASDAQ:CRWV",
+    r:"GPU cloud provider and NVIDIA partner/investee; one of the largest buyers of NVIDIA accelerators." },
+  { t:"NBIS", n:"Nebius Group",                   c:"Direct Investments", tv:"NASDAQ:NBIS",
+    r:"AI cloud and infrastructure provider in which NVIDIA has taken a strategic stake." },
+  { t:"NOK",  n:"Nokia",                          c:"Direct Investments", tv:"NYSE:NOK",
+    r:"Telecom networking vendor; NVIDIA made a strategic investment to collaborate on AI-RAN and data-center networking." },
+  { t:"SNPS", n:"Synopsys",                       c:"Direct Investments", tv:"NASDAQ:SNPS",
+    r:"EDA software for chip design; partners with NVIDIA, whose GPUs accelerate Synopsys' design and simulation tools." },
+];
+
+const CATEGORY_ORDER = ["IP","Fab","Memory","Packaging","Equipment","Networking","Server OEMs","Power Systems","Power Electronics","Direct Investments"];
+const TICKERS = COMPANIES.map(c => c.t);
+const BY_TICKER = Object.fromEntries(COMPANIES.map(c => [c.t, c]));
+
+/* ------------------------------------------------------------------ */
+/*  CACHE + RATE-LIMITED FETCH QUEUE (Finnhub free tier: 60/min)      */
+/* ------------------------------------------------------------------ */
+const cache = {};
+const getCache = (k) => { const e = cache[k]; return (e && e.exp > Date.now()) ? e.data : null; };
+const setCache = (k, d, ttl) => { cache[k] = { data: d, exp: Date.now() + ttl }; };
+const clearCache = () => { for (const k in cache) delete cache[k]; };
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+const MIN_GAP = 1100; // ms between calls => ~54/min, safely under 60/min
+let queue = [];
+let pumping = false;
+let lastCall = 0;
+
+function enqueue(fn) {
+  return new Promise((res, rej) => { queue.push({ fn, res, rej }); pump(); });
+}
+async function pump() {
+  if (pumping) return;
+  pumping = true;
+  while (queue.length) {
+    const { fn, res, rej } = queue.shift();
+    const wait = Math.max(0, MIN_GAP - (Date.now() - lastCall));
+    if (wait > 0) await sleep(wait);
+    lastCall = Date.now();
+    try { res(await fn()); } catch (e) { rej(e); }
+  }
+  pumping = false;
+}
+
+async function fhRaw(path, key) {
+  const url = `https://finnhub.io/api/v1/${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(key)}`;
+  const r = await fetch(url);
+  if (r.status === 429) throw new Error("RATE_LIMIT");
+  if (r.status === 401 || r.status === 403) throw new Error("AUTH");
+  if (!r.ok) throw new Error("HTTP_" + r.status);
+  return r.json();
+}
+function fh(path, key, ttl) {
+  const c = getCache(path);
+  if (c) return Promise.resolve(c);
+  return enqueue(() => fhRaw(path, key)).then(d => { setCache(path, d, ttl); return d; });
+}
+
+const TTL = { quote: 5*60e3, metric: 30*60e3, news: 15*60e3, earn: 60*60e3 };
+
+/* ------------------------------------------------------------------ */
+/*  FORMATTING HELPERS                                                */
+/* ------------------------------------------------------------------ */
+const fmtPrice = (v) => (v == null || isNaN(v)) ? "—" : "$" + Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtPct = (v) => (v == null || isNaN(v)) ? "—" : (v >= 0 ? "+" : "") + Number(v).toFixed(2) + "%";
+const fmtNum = (v, d=2) => (v == null || isNaN(v)) ? "—" : Number(v).toFixed(d);
+function fmtCap(millions) {
+  if (millions == null || isNaN(millions) || millions <= 0) return "—";
+  const v = millions * 1e6;
+  if (v >= 1e12) return "$" + (v/1e12).toFixed(2) + "T";
+  if (v >= 1e9)  return "$" + (v/1e9).toFixed(2) + "B";
+  if (v >= 1e6)  return "$" + (v/1e6).toFixed(2) + "M";
+  return "$" + v.toFixed(0);
+}
+function fmtBigDollar(v) {
+  if (v == null || isNaN(v) || v === 0) return "—";
+  const a = Math.abs(v);
+  if (a >= 1e9) return "$" + (v/1e9).toFixed(2) + "B";
+  if (a >= 1e6) return "$" + (v/1e6).toFixed(1) + "M";
+  if (a >= 1e3) return "$" + (v/1e3).toFixed(0) + "K";
+  return "$" + v.toFixed(2);
+}
+function relTime(unixSec) {
+  const diff = Date.now()/1000 - unixSec;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return Math.floor(diff/60) + "m ago";
+  if (diff < 86400) return Math.floor(diff/3600) + "h ago";
+  if (diff < 7*86400) return Math.floor(diff/86400) + "d ago";
+  return new Date(unixSec*1000).toLocaleDateString("en-US",{ month:"short", day:"numeric" });
+}
+const ymd = (date) => date.toISOString().slice(0,10);
+const colorFor = (v) => v == null ? "text-mute" : v >= 0 ? "text-up" : "text-down";
+
+function peFromMetric(m) {
+  if (!m) return null;
+  return m.peTTM ?? m.peBasicExclExtraTTM ?? m.peNormalizedAnnual ?? m.peExclExtraTTM ?? null;
+}
+
+/* ------------------------------------------------------------------ */
+/*  SMALL UI PRIMITIVES                                               */
+/* ------------------------------------------------------------------ */
+function Spinner({ className="" }) {
+  return <span className={"inline-block w-3.5 h-3.5 border-2 border-mute-2 border-t-nv rounded-full animate-spin " + className} />;
+}
+function Pct({ v, className="" }) {
+  return <span className={"tabular " + colorFor(v) + " " + className}>{fmtPct(v)}</span>;
+}
+
+/* ------------------------------------------------------------------ */
+/*  KPI BAR                                                           */
+/* ------------------------------------------------------------------ */
+function KpiBar({ nvda, quotes, metrics, earningsThisWeek }) {
+  const loaded = Object.values(quotes);
+  const avgDay = loaded.length ? loaded.reduce((s,q)=> s + (q?.dp ?? 0), 0) / loaded.length : null;
+  const totalCap = TICKERS.reduce((s,t)=>{ const m = metrics[t]; const c = m?.marketCapitalization; return s + (c && c>0 ? c : 0); }, 0);
+  const capCount = TICKERS.filter(t => metrics[t]?.marketCapitalization > 0).length;
+
+  const Item = ({ label, children, sub }) => (
+    <div className="flex flex-col justify-center px-4 sm:px-5 py-2.5 min-w-[150px] flex-1 border-l border-line first:border-l-0">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-mute-2 font-semibold">{label}</div>
+      <div className="mt-0.5 flex items-baseline gap-2">{children}</div>
+      {sub && <div className="text-[10px] text-mute-2 mt-0.5">{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div className="border border-line bg-panel rounded-lg flex flex-wrap overflow-hidden">
+      <Item label="NVDA" sub="NVIDIA Corp">
+        <span className="font-mono text-lg font-bold tabular">{nvda ? fmtPrice(nvda.c) : <Spinner/>}</span>
+        {nvda && <Pct v={nvda.dp} className="text-sm font-semibold" />}
+      </Item>
+      <Item label="Ecosystem Mkt Cap" sub={`${capCount}/${TICKERS.length} loaded`}>
+        <span className="font-mono text-lg font-bold tabular text-ink">{capCount ? fmtCap(totalCap) : <Spinner/>}</span>
+      </Item>
+      <Item label="Reporting · 7d" sub="earnings this week">
+        <span className="font-mono text-lg font-bold tabular text-nv">{earningsThisWeek == null ? <Spinner/> : earningsThisWeek}</span>
+      </Item>
+      <Item label="Avg Daily Move" sub={`${loaded.length} quotes`}>
+        {avgDay == null ? <Spinner/> : <span className={"font-mono text-lg font-bold tabular " + colorFor(avgDay)}>{fmtPct(avgDay)}</span>}
+      </Item>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  ECOSYSTEM GRID CARD                                               */
+/* ------------------------------------------------------------------ */
+function Card({ co, quote, metric, onClick }) {
+  const dp = quote?.dp;
+  const up = dp != null && dp >= 0;
+  const pe = peFromMetric(metric);
+  const ytd = metric?.yearToDatePriceReturnDaily;
+  const oneY = metric?.["52WeekPriceReturnDaily"];
+
+  return (
+    <button onClick={onClick}
+      className="card-hover text-left bg-panel border border-line rounded-lg p-3.5 w-full fade-up focus:outline-none focus:ring-1 focus:ring-nv/50">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="font-mono font-bold text-[15px] tracking-tight text-ink">{co.t}</div>
+          <div className="text-[11px] text-mute truncate leading-tight mt-0.5">{co.n}</div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="font-mono font-semibold text-[15px] tabular">{quote ? fmtPrice(quote.c) : <span className="inline-block w-14 h-4 rounded skel" />}</div>
+          <div className="text-[12px] font-semibold mt-0.5">
+            {quote ? <Pct v={dp} /> : <span className="inline-block w-10 h-3 rounded skel" />}
+          </div>
+        </div>
+      </div>
+
+      <div className={"mt-3 h-px w-full " + (up ? "bg-up/20" : dp!=null ? "bg-down/20" : "bg-line")} />
+
+      <div className="mt-2.5 grid grid-cols-4 gap-1 text-[10px]">
+        <div>
+          <div className="text-mute-2 uppercase tracking-wide">Mkt Cap</div>
+          <div className="font-mono text-mute mt-0.5">{metric ? fmtCap(metric.marketCapitalization) : "·"}</div>
+        </div>
+        <div>
+          <div className="text-mute-2 uppercase tracking-wide">P/E</div>
+          <div className="font-mono text-mute mt-0.5">{metric ? (pe ? fmtNum(pe,1) : "—") : "·"}</div>
+        </div>
+        <div>
+          <div className="text-mute-2 uppercase tracking-wide">YTD</div>
+          <div className="font-mono mt-0.5">{metric ? <Pct v={ytd}/> : <span className="text-mute">·</span>}</div>
+        </div>
+        <div>
+          <div className="text-mute-2 uppercase tracking-wide">1Y</div>
+          <div className="font-mono mt-0.5">{metric ? <Pct v={oneY}/> : <span className="text-mute">·</span>}</div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function CategorySection({ cat, quotes, metrics, onSelect }) {
+  const cos = COMPANIES.filter(c => c.c === cat);
+  return (
+    <section className="mb-9">
+      <div className="flex items-center gap-3 mb-3">
+        <h2 className="text-[11px] font-bold uppercase tracking-[0.18em] text-nv">{cat}</h2>
+        <span className="text-[10px] text-mute-2 font-mono">{cos.length}</span>
+        <div className="flex-1 h-px bg-line" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        {cos.map(co => (
+          <Card key={co.t} co={co} quote={quotes[co.t]} metric={metrics[co.t]} onClick={() => onSelect(co.t)} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  TRADINGVIEW CHART (Symbol Overview, re-rendered on range change)  */
+/* ------------------------------------------------------------------ */
+const RANGE_MAP = { "1D":"1D|1", "1W":"5D|15", "1M":"1M|30", "1Y":"12M|1D", "5Y":"60M|1W" };
+function TVChart({ symbol, range }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.innerHTML = "";
+    const inner = document.createElement("div");
+    inner.className = "tradingview-widget-container__widget";
+    inner.style.height = "100%";
+    el.appendChild(inner);
+    const s = document.createElement("script");
+    s.src = "https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js";
+    s.async = true;
+    s.innerHTML = JSON.stringify({
+      symbols: [[symbol]],
+      chartOnly: true,
+      width: "100%",
+      height: "100%",
+      locale: "en",
+      colorTheme: "dark",
+      autosize: true,
+      showVolume: false,
+      hideDateRanges: true,
+      hideMarketStatus: false,
+      hideSymbolLogo: true,
+      scalePosition: "right",
+      scaleMode: "Normal",
+      fontFamily: "Inter, sans-serif",
+      fontSize: "11",
+      noTimeScale: false,
+      valuesTracking: "1",
+      changeMode: "price-and-percent",
+      chartType: "area",
+      lineWidth: 2,
+      lineColor: "#76B900",
+      topColor: "rgba(118,185,0,0.22)",
+      bottomColor: "rgba(118,185,0,0.0)",
+      backgroundColor: "rgba(15,15,15,1)",
+      gridLineColor: "rgba(40,40,40,0.6)",
+      dateRanges: [RANGE_MAP[range] || "12M|1D"],
+    });
+    el.appendChild(s);
+  }, [symbol, range]);
+  return <div ref={ref} className="tradingview-widget-container w-full h-full" />;
+}
+
+/* ------------------------------------------------------------------ */
+/*  COMPANY DETAIL VIEW                                               */
+/* ------------------------------------------------------------------ */
+function Stat({ label, children }) {
+  return (
+    <div className="border border-line bg-panel rounded-md px-3 py-2.5">
+      <div className="text-[10px] uppercase tracking-wide text-mute-2 font-semibold">{label}</div>
+      <div className="font-mono text-sm mt-1 tabular">{children}</div>
+    </div>
+  );
+}
+
+function DetailView({ ticker, quote, metric, apiKey, onBack }) {
+  const co = BY_TICKER[ticker];
+  const [range, setRange] = useState("1Y");
+  const [news, setNews] = useState(null);
+  const [newsErr, setNewsErr] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    setNews(null); setNewsErr(null);
+    const to = new Date(); const from = new Date(); from.setDate(from.getDate() - 30);
+    fh(`company-news?symbol=${ticker}&from=${ymd(from)}&to=${ymd(to)}`, apiKey, TTL.news)
+      .then(d => { if (alive) setNews(Array.isArray(d) ? d.slice(0, 12) : []); })
+      .catch(e => { if (alive) setNewsErr(e.message); });
+    return () => { alive = false; };
+  }, [ticker, apiKey]);
+
+  const pe = peFromMetric(metric);
+  const dp = quote?.dp;
+
+  return (
+    <div className="fade-up">
+      <button onClick={onBack} className="text-[12px] text-mute hover:text-nv transition-colors mb-4 inline-flex items-center gap-1.5">
+        <span className="text-base leading-none">←</span> Back to ecosystem
+      </button>
+
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-5">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="font-mono text-3xl font-bold tracking-tight">{co.t}</h1>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-nv border border-nv/30 rounded px-2 py-0.5">{co.c}</span>
+          </div>
+          <div className="text-mute text-sm mt-1">{co.n}</div>
+        </div>
+        <div className="text-right">
+          <div className="font-mono text-3xl font-bold tabular">{quote ? fmtPrice(quote.c) : <Spinner/>}</div>
+          {quote && <div className="text-sm font-semibold mt-0.5"><Pct v={dp}/> <span className="text-mute font-normal">({quote.d >= 0 ? "+" : ""}{fmtNum(quote.d)})</span></div>}
+        </div>
+      </div>
+
+      <div className="border border-line bg-panel/60 rounded-lg p-3.5 mb-5">
+        <div className="text-[10px] uppercase tracking-[0.14em] text-nv font-bold mb-1.5">Role in NVIDIA supply chain</div>
+        <p className="text-sm text-ink/85 leading-relaxed">{co.r}</p>
+      </div>
+
+      {/* Chart */}
+      <div className="border border-line bg-panel rounded-lg overflow-hidden mb-5">
+        <div className="flex items-center justify-between px-3.5 pt-3">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-mute-2 font-semibold">Price</div>
+          <div className="flex gap-1">
+            {["1D","1W","1M","1Y","5Y"].map(r => (
+              <button key={r} onClick={() => setRange(r)}
+                className={"text-[11px] font-semibold font-mono px-2.5 py-1 rounded transition-colors " +
+                  (range === r ? "bg-nv text-black" : "text-mute hover:text-ink hover:bg-panel-2")}>{r}</button>
+            ))}
+          </div>
+        </div>
+        <div className="h-[340px] sm:h-[400px] mt-2 px-1.5 pb-1.5">
+          <TVChart symbol={co.tv} range={range} />
+        </div>
+      </div>
+
+      {/* Fundamentals */}
+      <div className="text-[11px] uppercase tracking-[0.14em] text-mute-2 font-semibold mb-2.5">Key Fundamentals</div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 mb-6">
+        <Stat label="Market Cap">{metric ? fmtCap(metric.marketCapitalization) : <Spinner/>}</Stat>
+        <Stat label="P/E (TTM)">{metric ? (pe ? fmtNum(pe,1) : "—") : <Spinner/>}</Stat>
+        <Stat label="YTD">{metric ? <Pct v={metric.yearToDatePriceReturnDaily}/> : <Spinner/>}</Stat>
+        <Stat label="1Y Return">{metric ? <Pct v={metric["52WeekPriceReturnDaily"]}/> : <Spinner/>}</Stat>
+        <Stat label="52W High">{metric ? fmtPrice(metric["52WeekHigh"]) : <Spinner/>}</Stat>
+        <Stat label="52W Low">{metric ? fmtPrice(metric["52WeekLow"]) : <Spinner/>}</Stat>
+        <Stat label="Day Range">{quote ? `${fmtNum(quote.l)} – ${fmtNum(quote.h)}` : <Spinner/>}</Stat>
+        <Stat label="Prev Close">{quote ? fmtPrice(quote.pc) : <Spinner/>}</Stat>
+        <Stat label="Open">{quote ? fmtPrice(quote.o) : <Spinner/>}</Stat>
+        <Stat label="EPS (TTM)">{metric ? fmtNum(metric.epsTTM ?? metric.epsBasicExclExtraItemsTTM) : <Spinner/>}</Stat>
+        <Stat label="Div Yield">{metric ? (metric.currentDividendYieldTTM != null ? fmtNum(metric.currentDividendYieldTTM,2)+"%" : "—") : <Spinner/>}</Stat>
+        <Stat label="Beta">{metric ? fmtNum(metric.beta) : <Spinner/>}</Stat>
+      </div>
+
+      {/* News */}
+      <div className="text-[11px] uppercase tracking-[0.14em] text-mute-2 font-semibold mb-2.5">Recent News · {co.t}</div>
+      <div className="space-y-2">
+        {news == null && !newsErr && <div className="text-mute text-sm flex items-center gap-2"><Spinner/> Loading news…</div>}
+        {newsErr && <div className="text-down/80 text-sm">Couldn't load news ({newsErr === "AUTH" ? "endpoint not available on your plan" : newsErr === "RATE_LIMIT" ? "rate limited, try again shortly" : newsErr}).</div>}
+        {news && news.length === 0 && <div className="text-mute text-sm">No recent headlines.</div>}
+        {news && news.map((item, i) => <NewsRow key={item.id || i} item={{...item, _ticker: co.t}} compact />)}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  NEWS ROW                                                          */
+/* ------------------------------------------------------------------ */
+function NewsRow({ item, compact }) {
+  return (
+    <a href={item.url} target="_blank" rel="noopener noreferrer"
+       className="block border border-line bg-panel hover:bg-panel-2 hover:border-line-2 rounded-md px-3.5 py-3 transition-colors group">
+      <div className="flex items-start gap-3">
+        <span className="shrink-0 mt-0.5 font-mono text-[10px] font-bold text-nv border border-nv/30 rounded px-1.5 py-0.5">{item._ticker}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13.5px] text-ink/90 group-hover:text-ink leading-snug font-medium">{item.headline}</div>
+          <div className="flex items-center gap-2 mt-1.5 text-[11px] text-mute-2">
+            <span className="truncate max-w-[160px]">{item.source}</span>
+            <span>·</span>
+            <span className="font-mono">{relTime(item.datetime)}</span>
+            <span className="ml-auto text-nv/50 group-hover:text-nv transition-colors">↗</span>
+          </div>
+        </div>
+      </div>
+    </a>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  NEWS FEED (aggregate, lazy-loaded)                                */
+/* ------------------------------------------------------------------ */
+function NewsFeed({ apiKey, active }) {
+  const [items, setItems] = useState([]);
+  const [progress, setProgress] = useState({ done: 0, total: TICKERS.length });
+  const [loading, setLoading] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [filter, setFilter] = useState("ALL");
+
+  useEffect(() => {
+    if (!active || started) return;
+    setStarted(true); setLoading(true);
+    const to = new Date(); const from = new Date(); from.setDate(from.getDate() - 10);
+    const fromS = ymd(from), toS = ymd(to);
+    let collected = [];
+    let done = 0;
+    const tasks = TICKERS.map(t =>
+      fh(`company-news?symbol=${t}&from=${fromS}&to=${toS}`, apiKey, TTL.news)
+        .then(d => {
+          if (Array.isArray(d)) {
+            const tagged = d.slice(0, 6).map(x => ({ ...x, _ticker: t, _cat: BY_TICKER[t].c }));
+            collected = collected.concat(tagged);
+            collected.sort((a,b) => b.datetime - a.datetime);
+            setItems([...collected]);
+          }
+        })
+        .catch(() => {})
+        .finally(() => { done++; setProgress({ done, total: TICKERS.length }); })
+    );
+    Promise.allSettled(tasks).then(() => setLoading(false));
+  }, [active, started, apiKey]);
+
+  const filtered = useMemo(() => {
+    let arr = items;
+    if (filter !== "ALL") {
+      if (filter.startsWith("CAT:")) { const c = filter.slice(4); arr = items.filter(i => i._cat === c); }
+      else arr = items.filter(i => i._ticker === filter);
+    }
+    return arr.slice(0, 120);
+  }, [items, filter]);
+
+  return (
+    <div className="fade-up">
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <h1 className="text-lg font-bold">Ecosystem News</h1>
+        {loading && <span className="text-[11px] text-mute-2 flex items-center gap-1.5"><Spinner/> {progress.done}/{progress.total} feeds</span>}
+        <div className="ml-auto">
+          <select value={filter} onChange={e => setFilter(e.target.value)}
+            className="bg-panel border border-line rounded-md text-[12px] px-2.5 py-1.5 text-ink focus:outline-none focus:border-nv/50">
+            <option value="ALL">All companies</option>
+            <optgroup label="By category">
+              {CATEGORY_ORDER.map(c => <option key={c} value={"CAT:"+c}>{c}</option>)}
+            </optgroup>
+            <optgroup label="By company">
+              {COMPANIES.map(c => <option key={c.t} value={c.t}>{c.t} — {c.n}</option>)}
+            </optgroup>
+          </select>
+        </div>
+      </div>
+      <div className="space-y-2">
+        {filtered.length === 0 && !loading && <div className="text-mute text-sm">No headlines found.</div>}
+        {filtered.length === 0 && loading && <div className="text-mute text-sm flex items-center gap-2"><Spinner/> Fetching headlines (throttled to respect Finnhub limits)…</div>}
+        {filtered.map((item, i) => <NewsRow key={(item.id||"") + i} item={item} />)}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  EARNINGS CALENDAR                                                 */
+/* ------------------------------------------------------------------ */
+const HOUR_LABEL = { bmo: "BMO", amc: "AMC", dmh: "During", "": "—" };
+function EarningsCalendar({ apiKey, active, earnings, error }) {
+  const within7 = (dateStr) => {
+    const d = new Date(dateStr + "T00:00:00");
+    const now = new Date(); now.setHours(0,0,0,0);
+    const diff = (d - now) / 86400e3;
+    return diff >= 0 && diff < 7;
+  };
+
+  return (
+    <div className="fade-up">
+      <div className="flex items-center gap-3 mb-4">
+        <h1 className="text-lg font-bold">Earnings Calendar</h1>
+        <span className="text-[11px] text-mute-2">next ~45 days · tracked tickers</span>
+        {!earnings && !error && <Spinner className="ml-1" />}
+      </div>
+
+      {error && <div className="text-down/80 text-sm border border-down/20 bg-down/5 rounded-md px-3 py-2.5">
+        Earnings calendar unavailable ({error === "AUTH" ? "this Finnhub endpoint isn't on your current plan" : error}).
+      </div>}
+
+      {earnings && earnings.length === 0 && <div className="text-mute text-sm">No upcoming earnings found for tracked tickers.</div>}
+
+      {earnings && earnings.length > 0 && (
+        <div className="border border-line rounded-lg overflow-hidden">
+          <div className="grid grid-cols-[88px_64px_1fr_64px_88px_96px] gap-2 px-3.5 py-2.5 bg-panel-2 text-[10px] uppercase tracking-wide text-mute-2 font-semibold">
+            <div>Date</div><div>Ticker</div><div className="hidden sm:block">Company</div><div className="sm:hidden">Co.</div><div>Time</div><div className="text-right">EPS est</div><div className="text-right">Rev est</div>
+          </div>
+          {earnings.map((e, i) => {
+            const soon = within7(e.date);
+            return (
+              <div key={e.symbol + e.date + i}
+                className={"grid grid-cols-[88px_64px_1fr_64px_88px_96px] gap-2 px-3.5 py-2.5 text-[12.5px] items-center border-t border-line " +
+                  (soon ? "bg-nv/5 border-l-2 border-l-nv" : "")}>
+                <div className="font-mono text-mute tabular">{new Date(e.date+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>
+                <div className="font-mono font-bold text-nv flex items-center gap-1.5">
+                  {e.symbol}{soon && <span className="hidden sm:inline text-[8px] text-nv/70 font-semibold border border-nv/30 rounded px-1">7D</span>}
+                </div>
+                <div className="text-mute truncate">{BY_TICKER[e.symbol]?.n || ""}</div>
+                <div className="font-mono text-[11px] text-mute-2">{HOUR_LABEL[e.hour] || "—"}</div>
+                <div className="font-mono text-right tabular text-ink/80">{e.epsEstimate != null ? e.epsEstimate.toFixed(2) : "—"}</div>
+                <div className="font-mono text-right tabular text-ink/80">{fmtBigDollar(e.revenueEstimate)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  API KEY GATE                                                      */
+/* ------------------------------------------------------------------ */
+function KeyGate({ onSubmit }) {
+  const [k, setK] = useState(DEFAULT_KEY);
+  return (
+    <div className="max-w-md mx-auto mt-24 fade-up">
+      <div className="border border-line bg-panel rounded-xl p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <div className="w-2.5 h-2.5 rounded-sm bg-nv" />
+          <h1 className="text-lg font-bold">NVIDIA Ecosystem Tracker</h1>
+        </div>
+        <p className="text-[13px] text-mute leading-relaxed mb-4">
+          Enter a Finnhub API key to load live quotes, fundamentals, news, and earnings.
+          A free key works ( <a href="https://finnhub.io/register" target="_blank" rel="noopener" className="text-nv hover:underline">finnhub.io/register</a> ).
+        </p>
+        <input value={k} onChange={e => setK(e.target.value)} spellCheck={false}
+          className="w-full bg-bg border border-line rounded-md px-3 py-2.5 font-mono text-[12px] text-ink focus:outline-none focus:border-nv/60 mb-3"
+          placeholder="Finnhub API key" />
+        <button onClick={() => k.trim() && onSubmit(k.trim())}
+          className="w-full bg-nv text-black font-semibold text-sm rounded-md py-2.5 hover:bg-nv-dim transition-colors">
+          Load dashboard
+        </button>
+        <p className="text-[10px] text-mute-2 mt-3 leading-relaxed">
+          Calls are throttled (~54/min) and cached 5–30 min to stay under the free tier's 60/min limit. The key is kept only in memory for this session.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  ROOT APP                                                          */
+/* ------------------------------------------------------------------ */
+function App() {
+  const [apiKey, setApiKey] = useState(DEFAULT_KEY); // auto-loads with embedded key
+  const [view, setView] = useState("grid"); // grid | detail | news | earnings
+  const [selected, setSelected] = useState(null);
+
+  const [nvda, setNvda] = useState(null);
+  const [quotes, setQuotes] = useState({});
+  const [metrics, setMetrics] = useState({});
+  const [earnings, setEarnings] = useState(null);
+  const [earnErr, setEarnErr] = useState(null);
+  const [loadErr, setLoadErr] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [newsTabOpened, setNewsTabOpened] = useState(false);
+
+  const loadAll = useCallback((key) => {
+    setRefreshing(true); setLoadErr(null);
+    // NVDA reference quote
+    fh(`quote?symbol=NVDA`, key, TTL.quote).then(setNvda).catch(e => { if (e.message === "AUTH") setLoadErr("AUTH"); });
+    // Quotes first (prices paint fast), then metrics
+    TICKERS.forEach(t => {
+      fh(`quote?symbol=${t}`, key, TTL.quote)
+        .then(d => setQuotes(p => ({ ...p, [t]: d })))
+        .catch(e => { if (e.message === "AUTH") setLoadErr("AUTH"); });
+    });
+    TICKERS.forEach(t => {
+      fh(`stock/metric?symbol=${t}&metric=all`, key, TTL.metric)
+        .then(d => setMetrics(p => ({ ...p, [t]: d?.metric || {} })))
+        .catch(() => {});
+    });
+    // Earnings calendar (next ~45 days)
+    const to = new Date(); to.setDate(to.getDate() + 45);
+    fh(`calendar/earnings?from=${ymd(new Date())}&to=${ymd(to)}`, key, TTL.earn)
+      .then(d => {
+        const arr = (d?.earningsCalendar || [])
+          .filter(e => TICKERS.includes(e.symbol))
+          .sort((a,b) => a.date.localeCompare(b.date));
+        // de-dupe by symbol+date
+        const seen = new Set(); const out = [];
+        for (const e of arr) { const k2 = e.symbol+e.date; if (!seen.has(k2)) { seen.add(k2); out.push(e); } }
+        setEarnings(out);
+      })
+      .catch(e => setEarnErr(e.message));
+
+    setTimeout(() => { setRefreshing(false); setLastUpdated(new Date()); }, 1200);
+  }, []);
+
+  useEffect(() => { if (apiKey) loadAll(apiKey); }, [apiKey, loadAll]);
+
+  const handleRefresh = () => { clearCache(); setNvda(null); setQuotes({}); setMetrics({}); setEarnings(null); setEarnErr(null); loadAll(apiKey); };
+  const select = (t) => { setSelected(t); setView("detail"); };
+
+  const earningsThisWeek = useMemo(() => {
+    if (!earnings) return null;
+    const now = new Date(); now.setHours(0,0,0,0);
+    const set = new Set();
+    earnings.forEach(e => { const d = new Date(e.date+"T00:00:00"); const diff = (d-now)/86400e3; if (diff>=0 && diff<7) set.add(e.symbol); });
+    return set.size;
+  }, [earnings]);
+
+  if (!apiKey) return <KeyGate onSubmit={setApiKey} />;
+
+  const NavBtn = ({ id, label }) => (
+    <button onClick={() => { if (id==="news") setNewsTabOpened(true); setView(id); if (id!=="detail") setSelected(null); }}
+      className={"text-[12.5px] font-semibold px-3 py-1.5 rounded-md transition-colors " +
+        ((view === id || (id==="grid" && view==="detail")) ? "bg-panel-2 text-nv" : "text-mute hover:text-ink")}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="min-h-screen max-w-[1400px] mx-auto px-4 sm:px-6 py-5">
+      {/* Header */}
+      <header className="flex items-center gap-3 mb-4 flex-wrap">
+        <div className="flex items-center gap-2.5">
+          <div className="w-3 h-3 rounded-sm bg-nv shadow-[0_0_12px_rgba(118,185,0,0.6)]" />
+          <h1 className="text-[15px] font-extrabold tracking-tight">NVIDIA <span className="text-nv">Ecosystem</span> Tracker</h1>
+        </div>
+        <nav className="flex items-center gap-1 ml-1 sm:ml-4">
+          <NavBtn id="grid" label="Ecosystem" />
+          <NavBtn id="news" label="News" />
+          <NavBtn id="earnings" label="Earnings" />
+        </nav>
+        <div className="ml-auto flex items-center gap-3">
+          {lastUpdated && <span className="hidden sm:block text-[10px] text-mute-2 font-mono">upd {lastUpdated.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</span>}
+          <button onClick={handleRefresh} disabled={refreshing}
+            className="text-[11px] font-semibold border border-line rounded-md px-2.5 py-1.5 text-mute hover:text-nv hover:border-nv/40 transition-colors flex items-center gap-1.5 disabled:opacity-50">
+            {refreshing ? <Spinner/> : <span>↻</span>} Refresh
+          </button>
+        </div>
+      </header>
+
+      {loadErr === "AUTH" && (
+        <div className="border border-down/30 bg-down/5 text-down/90 text-[12.5px] rounded-md px-3 py-2.5 mb-4">
+          Finnhub rejected the API key (401/403). Reload the page to enter a different key.
+        </div>
+      )}
+
+      <div className="mb-6"><KpiBar nvda={nvda} quotes={quotes} metrics={metrics} earningsThisWeek={earningsThisWeek} /></div>
+
+      {view === "grid" && (
+        <div className="fade-up">
+          {CATEGORY_ORDER.map(cat => (
+            <CategorySection key={cat} cat={cat} quotes={quotes} metrics={metrics} onSelect={select} />
+          ))}
+          <div className="text-[10px] text-mute-2 leading-relaxed border-t border-line pt-4 mt-2">
+            Data: Finnhub (quotes, fundamentals, news, earnings) · charts via TradingView. Fundamentals fill in progressively as throttled requests complete. Not investment advice.
+          </div>
+        </div>
+      )}
+
+      {view === "detail" && selected && (
+        <DetailView ticker={selected} quote={quotes[selected]} metric={metrics[selected]} apiKey={apiKey} onBack={() => setView("grid")} />
+      )}
+
+      {view === "news" && <NewsFeed apiKey={apiKey} active={newsTabOpened || view==="news"} />}
+
+      {view === "earnings" && <EarningsCalendar apiKey={apiKey} active earnings={earnings} error={earnErr} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
