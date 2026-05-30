@@ -6,6 +6,12 @@
 <title>NVIDIA Ecosystem Tracker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://finnhub.io" crossorigin>
+<link rel="dns-prefetch" href="https://finnhub.io">
+<link rel="preconnect" href="https://s3.tradingview.com">
+<link rel="dns-prefetch" href="https://s.tradingview.com">
+<link rel="dns-prefetch" href="https://data.tradingview.com">
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js" async></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
@@ -158,10 +164,20 @@ const setCache = (k, d, ttl) => { cache[k] = { data: d, exp: Date.now() + ttl };
 const clearCache = () => { for (const k in cache) delete cache[k]; };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-const MIN_GAP = 1100; // ms between calls => ~54/min, safely under 60/min
+/* Concurrent rolling-window scheduler.
+   Finnhub free tier allows ~60 calls/min. Instead of a fixed 1.1s gap (which
+   serialized everything and took >60s to fill the grid), we fire calls in
+   parallel — capped at MAX_PER_WINDOW starts per 60s and spaced by MIN_SPACING
+   to avoid burst limits. Network round-trips overlap, so the grid populates in
+   a few seconds instead of a minute. */
+const WINDOW = 60000;
+const MAX_PER_WINDOW = 59;   // safety margin under 60/min
+const MIN_SPACING = 70;      // ms between starts (~14/sec, under burst limits)
+let callTimes = [];          // start timestamps within the rolling window
 let queue = [];
+let lastStart = 0;
 let pumping = false;
-let lastCall = 0;
+const inflight = {};          // path -> Promise (de-dupe identical concurrent calls)
 
 function enqueue(fn) {
   return new Promise((res, rej) => { queue.push({ fn, res, rej }); pump(); });
@@ -170,13 +186,29 @@ async function pump() {
   if (pumping) return;
   pumping = true;
   while (queue.length) {
-    const { fn, res, rej } = queue.shift();
-    const wait = Math.max(0, MIN_GAP - (Date.now() - lastCall));
-    if (wait > 0) await sleep(wait);
-    lastCall = Date.now();
-    try { res(await fn()); } catch (e) { rej(e); }
+    const now = Date.now();
+    callTimes = callTimes.filter(t => now - t < WINDOW);
+    if (callTimes.length >= MAX_PER_WINDOW) {
+      await sleep(WINDOW - (now - callTimes[0]) + 25);
+      continue;
+    }
+    const sinceLast = now - lastStart;
+    if (sinceLast < MIN_SPACING) { await sleep(MIN_SPACING - sinceLast); continue; }
+    const job = queue.shift();
+    lastStart = Date.now();
+    callTimes.push(lastStart);
+    runJob(job);               // fire-and-forget => true concurrency
   }
   pumping = false;
+}
+async function runJob({ fn, res, rej }) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { res(await fn()); return; }
+    catch (e) {
+      if (e.message === "RATE_LIMIT" && attempt < 2) { await sleep(1500 * (attempt + 1)); continue; }
+      rej(e); return;
+    }
+  }
 }
 
 async function fhRaw(path, key) {
@@ -190,7 +222,12 @@ async function fhRaw(path, key) {
 function fh(path, key, ttl) {
   const c = getCache(path);
   if (c) return Promise.resolve(c);
-  return enqueue(() => fhRaw(path, key)).then(d => { setCache(path, d, ttl); return d; });
+  if (inflight[path]) return inflight[path];          // share an in-flight request
+  const p = enqueue(() => fhRaw(path, key))
+    .then(d => { setCache(path, d, ttl); return d; })
+    .finally(() => { delete inflight[path]; });
+  inflight[path] = p;
+  return p;
 }
 
 const TTL = { quote: 5*60e3, metric: 30*60e3, news: 15*60e3, earn: 60*60e3 };
@@ -348,53 +385,82 @@ function CategorySection({ cat, quotes, metrics, onSelect }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  TRADINGVIEW CHART (Symbol Overview, re-rendered on range change)  */
+/*  TRADINGVIEW LINE CHART (official tv.js widget loader)             */
 /* ------------------------------------------------------------------ */
-const RANGE_MAP = { "1D":"1D|1", "1W":"5D|15", "1M":"1M|30", "1Y":"12M|1D", "5Y":"60M|1W" };
-function TVChart({ symbol, range }) {
+// Uses TradingView's tv.js library (loaded in <head>) which is the most
+// reliable way to embed programmatically. style:"2" = line chart. The widget
+// has its own bottom range tabs (1D / 5D / 1M / 3M / 6M / YTD / 1Y / 5Y / All).
+let _tvSeq = 0;
+function TVChart({ symbol }) {
   const ref = useRef(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.innerHTML = "";
-    const inner = document.createElement("div");
-    inner.className = "tradingview-widget-container__widget";
-    inner.style.height = "100%";
-    el.appendChild(inner);
-    const s = document.createElement("script");
-    s.src = "https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js";
-    s.async = true;
-    s.innerHTML = JSON.stringify({
-      symbols: [[symbol]],
-      chartOnly: true,
-      width: "100%",
-      height: "100%",
-      locale: "en",
-      colorTheme: "dark",
-      autosize: true,
-      showVolume: false,
-      hideDateRanges: true,
-      hideMarketStatus: false,
-      hideSymbolLogo: true,
-      scalePosition: "right",
-      scaleMode: "Normal",
-      fontFamily: "Inter, sans-serif",
-      fontSize: "11",
-      noTimeScale: false,
-      valuesTracking: "1",
-      changeMode: "price-and-percent",
-      chartType: "area",
-      lineWidth: 2,
-      lineColor: "#76B900",
-      topColor: "rgba(118,185,0,0.22)",
-      bottomColor: "rgba(118,185,0,0.0)",
-      backgroundColor: "rgba(15,15,15,1)",
-      gridLineColor: "rgba(40,40,40,0.6)",
-      dateRanges: [RANGE_MAP[range] || "12M|1D"],
-    });
-    el.appendChild(s);
-  }, [symbol, range]);
-  return <div ref={ref} className="tradingview-widget-container w-full h-full" />;
+    let cancelled = false;
+    let tries = 0;
+    setFailed(false);
+    const id = "tv_" + (++_tvSeq);
+    function build() {
+      if (cancelled || !ref.current) return;
+      if (!(window.TradingView && window.TradingView.widget)) {
+        if (tries++ > 60) { setFailed(true); return; }   // ~9s of polling
+        setTimeout(build, 150);
+        return;
+      }
+      ref.current.innerHTML = "";
+      const host = document.createElement("div");
+      host.id = id;
+      host.style.height = "100%";
+      host.style.width = "100%";
+      ref.current.appendChild(host);
+      try {
+        new window.TradingView.widget({
+          container_id: id,
+          symbol: symbol,
+          interval: "D",
+          timezone: "Etc/UTC",
+          theme: "dark",
+          style: "2",                 // 2 = line
+          locale: "en",
+          autosize: true,
+          withdateranges: true,       // bottom range tabs
+          hide_side_toolbar: true,
+          hide_top_toolbar: false,
+          hide_legend: false,
+          allow_symbol_change: false,
+          save_image: false,
+          backgroundColor: "rgba(15,15,15,1)",
+          gridColor: "rgba(40,40,40,0.5)",
+          toolbar_bg: "#0f0f0f",
+          overrides: {
+            "mainSeriesProperties.style": 2,
+            "mainSeriesProperties.lineStyle.color": "#76B900",
+            "mainSeriesProperties.lineStyle.linewidth": 2,
+            "paneProperties.background": "#0f0f0f",
+            "paneProperties.backgroundType": "solid",
+            "paneProperties.vertGridProperties.color": "#1c1c1c",
+            "paneProperties.horzGridProperties.color": "#1c1c1c",
+            "scalesProperties.textColor": "#8a8a8a",
+            "scalesProperties.lineColor": "#242424",
+          },
+        });
+      } catch (e) { setFailed(true); }
+    }
+    build();
+    return () => { cancelled = true; };
+  }, [symbol]);
+
+  return (
+    <div className="w-full h-full relative">
+      <div ref={ref} className="w-full h-full" />
+      {failed && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center gap-2 bg-panel">
+          <div className="text-[12px] text-mute">Chart couldn't load here (third-party embeds may be blocked in this view).</div>
+          <a href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}`} target="_blank" rel="noopener"
+             className="text-[12px] text-nv hover:underline">Open {symbol} on TradingView ↗</a>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -411,7 +477,6 @@ function Stat({ label, children }) {
 
 function DetailView({ ticker, quote, metric, apiKey, onBack }) {
   const co = BY_TICKER[ticker];
-  const [range, setRange] = useState("1Y");
   const [news, setNews] = useState(null);
   const [newsErr, setNewsErr] = useState(null);
 
@@ -457,16 +522,10 @@ function DetailView({ ticker, quote, metric, apiKey, onBack }) {
       <div className="border border-line bg-panel rounded-lg overflow-hidden mb-5">
         <div className="flex items-center justify-between px-3.5 pt-3">
           <div className="text-[11px] uppercase tracking-[0.14em] text-mute-2 font-semibold">Price</div>
-          <div className="flex gap-1">
-            {["1D","1W","1M","1Y","5Y"].map(r => (
-              <button key={r} onClick={() => setRange(r)}
-                className={"text-[11px] font-semibold font-mono px-2.5 py-1 rounded transition-colors " +
-                  (range === r ? "bg-nv text-black" : "text-mute hover:text-ink hover:bg-panel-2")}>{r}</button>
-            ))}
-          </div>
+          <div className="text-[10px] text-mute-2 font-mono hidden sm:block">range buttons on chart →</div>
         </div>
         <div className="h-[340px] sm:h-[400px] mt-2 px-1.5 pb-1.5">
-          <TVChart symbol={co.tv} range={range} />
+          <TVChart symbol={co.tv} />
         </div>
       </div>
 
@@ -696,34 +755,34 @@ function App() {
 
   const loadAll = useCallback((key) => {
     setRefreshing(true); setLoadErr(null);
-    // NVDA reference quote
+    // Priority 1: NVDA headline quote + earnings calendar (both feed the KPI bar)
     fh(`quote?symbol=NVDA`, key, TTL.quote).then(setNvda).catch(e => { if (e.message === "AUTH") setLoadErr("AUTH"); });
-    // Quotes first (prices paint fast), then metrics
-    TICKERS.forEach(t => {
-      fh(`quote?symbol=${t}`, key, TTL.quote)
-        .then(d => setQuotes(p => ({ ...p, [t]: d })))
-        .catch(e => { if (e.message === "AUTH") setLoadErr("AUTH"); });
-    });
-    TICKERS.forEach(t => {
-      fh(`stock/metric?symbol=${t}&metric=all`, key, TTL.metric)
-        .then(d => setMetrics(p => ({ ...p, [t]: d?.metric || {} })))
-        .catch(() => {});
-    });
-    // Earnings calendar (next ~45 days)
     const to = new Date(); to.setDate(to.getDate() + 45);
     fh(`calendar/earnings?from=${ymd(new Date())}&to=${ymd(to)}`, key, TTL.earn)
       .then(d => {
         const arr = (d?.earningsCalendar || [])
           .filter(e => TICKERS.includes(e.symbol))
           .sort((a,b) => a.date.localeCompare(b.date));
-        // de-dupe by symbol+date
         const seen = new Set(); const out = [];
         for (const e of arr) { const k2 = e.symbol+e.date; if (!seen.has(k2)) { seen.add(k2); out.push(e); } }
         setEarnings(out);
       })
       .catch(e => setEarnErr(e.message));
+    // Priority 2: all card prices (paint fast)
+    TICKERS.forEach(t => {
+      fh(`quote?symbol=${t}`, key, TTL.quote)
+        .then(d => setQuotes(p => ({ ...p, [t]: d })))
+        .catch(e => { if (e.message === "AUTH") setLoadErr("AUTH"); });
+    });
+    // Priority 3: fundamentals (fill in behind the prices)
+    TICKERS.forEach(t => {
+      fh(`stock/metric?symbol=${t}&metric=all`, key, TTL.metric)
+        .then(d => setMetrics(p => ({ ...p, [t]: d?.metric || {} })))
+        .catch(() => {});
+    });
 
-    setTimeout(() => { setRefreshing(false); setLastUpdated(new Date()); }, 1200);
+    setLastUpdated(new Date());
+    setTimeout(() => setRefreshing(false), 800);
   }, []);
 
   useEffect(() => { if (apiKey) loadAll(apiKey); }, [apiKey, loadAll]);
